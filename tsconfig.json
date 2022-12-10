@@ -1,6 +1,7 @@
 {
   "extends": "@tsconfig/node14/tsconfig.json",
   "compilerOptions": {
+    "target": "es6",
     "rootDir": "src",
     "outDir": "dist",
     "alwaysStrict": true,
