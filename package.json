@@ -1,0 +1,34 @@
+{
+  "name": "gurl",
+  "version": "0.0.1",
+  "description": "Godly URL parsing",
+  "main": "index.ts",
+  "scripts": {
+    "prettier": "prettier --write .",
+    "test": "jest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amatski/gurl.git"
+  },
+  "keywords": [
+    "url",
+    "parsing",
+    "godly",
+    "parse-url",
+    "golang",
+    "schema",
+    "query"
+  ],
+  "author": "Taras Gritsenko",
+  "license": "BSD-2-Clause",
+  "bugs": {
+    "url": "https://github.com/amatski/gurl/issues"
+  },
+  "homepage": "https://github.com/amatski/gurl#readme",
+  "devDependencies": {
+    "@tsconfig/node14": "^1.0.3",
+    "prettier": "2.8.1",
+    "typescript": "^4.9.4"
+  }
+}
