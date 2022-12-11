@@ -183,34 +183,34 @@ var unescape = (s: string, mode: number): Result<string> => {
 			hasPlus = mode == encodeQueryComponent
 			i++
 		default:
-			if ((mode == encodeHost || mode == encodeZone) && s[i] < 0x80 && shouldEscape(s[i], mode)) {
-				return "", InvalidHostError(s[i : i+1])
+			if ((mode == encodeHost || mode == encodeZone) && s[i].charCodeAt(0) < 0x80 && shouldEscape(s[i], mode)) {
+				return { name: "INVALID_HOST_ERROR", message: s.slice(i, i+3) }
 			}
 			i++
 		}
 	}
 
 	if (n == 0 && !hasPlus) {
-		return s, nil
+		return s
 	}
 
-	t = "";
-	for (var i =0; i < s.length; i++) {
-		switch s[i] {
+	const t : number[] = []; // byte array
+	for (var i = 0; i < s.length; i++) {
+		switch (s[i]) {
 		case '%':
-			t.WriteByte(unhex(s[i+1])<<4 | unhex(s[i+2]))
+			t.push(unhex(s[i+1])<<4 | unhex(s[i+2]))
 			i += 2
 		case '+':
-			if mode == encodeQueryComponent {
-				t.WriteByte(' ')
+			if (mode == encodeQueryComponent) {
+				t.push(' '.charCodeAt(0))
 			} else {
-				t.WriteByte('+')
+				t.push('+'.charCodeAt(0))
 			}
 		default:
-			t.WriteByte(s[i])
+			t.push(s[i].charCodeAt(0))
 		}
 	}
-	return t.String(), nil
+	return String.fromCharCode(...t)
 }
 
 // parseHost parses host as an authority without user
