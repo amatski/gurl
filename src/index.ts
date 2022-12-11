@@ -89,6 +89,218 @@ var getScheme = (rawURL: string): Result<Scheme> => {
 	return { Scheme: "", Path: rawURL }
 }
 
+// validOptionalPort reports whether port is either an empty string
+// or matches /^:\d*$/
+var validOptionalPort = (port: string): boolean {
+	if (port == "") {
+		return true
+	}
+
+	if (port[0] != ':') {
+		return false
+	}
+
+	for (var b = 1; b < port.length; b++) {
+		if (port.charCodeAt(b) < '0'.charCodeAt(0) || port.charCodeAt(b) > '9'.charCodeAt(0)) {
+			return false
+		}
+	}
+	return true
+}
+
+
+var ishex = (c: string): boolean => {
+	let v = c.charCodeAt(0);
+	if (v >= '0'.charCodeAt(0) && v <= '9'.charCodeAt(0)) {
+		return true;
+	}
+	if (v >= 'a'.charCodeAt(0) && v <= 'f'.charCodeAt(0)) {
+		return true;
+	}
+	if (v >= 'A'.charCodeAt(0) && v <= 'F'.charCodeAt(0)) {
+		return true;
+	}
+	return false;
+}
+
+var unhex = (c: string): number {
+	let v = c.charCodeAt(0);
+	if (v >= '0'.charCodeAt(0) && v <= '9'.charCodeAt(0)) {
+		return v - '0'.charCodeAt(0);
+	}
+	if (v >= 'a'.charCodeAt(0) && v <= 'f'.charCodeAt(0)) {
+		return v - 'a'.charCodeAt(0) + 10;
+	}
+	if (v >= 'A'.charCodeAt(0) && v <= 'F'.charCodeAt(0)) {
+		return v - 'A'.charCodeAt(0) + 10;
+	}
+	return 0;
+}
+
+
+// unescape unescapes a string; the mode specifies
+// which section of the URL string is being unescaped.
+var unescape = (s: string, mode: number): Result<string> => {
+	// Count %, check that they're well-formed.
+	var n = 0;
+	var hasPlus = false;
+	var i = 0;
+	while (i < s.length){
+		switch s[i] {
+		case '%':
+			n++
+			if (i+2 >= s.length || !ishex(s[i+1]) || !ishex(s[i+2])) {
+				s = s.slice(i)
+				if (s.length > 3) {
+					s = s.slice(0, 3)
+				}
+				return { name: "", message: s }
+			}
+			// Per https://tools.ietf.org/html/rfc3986#page-21
+			// in the host component %-encoding can only be used
+			// for non-ASCII bytes.
+			// But https://tools.ietf.org/html/rfc6874#section-2
+			// introduces %25 being allowed to escape a percent sign
+			// in IPv6 scoped-address literals. Yay.
+			if (mode == encodeHost && unhex(s[i+1]) < 8 && s.slice(i, i+3) != "%25") {
+				return "", EscapeError(s[i : i+3])
+			}
+			if (mode == encodeZone) {
+				// RFC 6874 says basically "anything goes" for zone identifiers
+				// and that even non-ASCII can be redundantly escaped,
+				// but it seems prudent to restrict %-escaped bytes here to those
+				// that are valid host name bytes in their unescaped form.
+				// That is, you can use escaping in the zone identifier but not
+				// to introduce bytes you couldn't just write directly.
+				// But Windows puts spaces here! Yay.
+				let v = unhex(s[i+1])<<4 | unhex(s[i+2]);
+				if (s.slice(i, i+3) != "%25" && v != ' '.charCodeAt(0) && shouldEscape(v, encodeHost)) {
+					return "", EscapeError(s[i : i+3])
+				}
+			}
+			i += 3
+		case '+':
+			hasPlus = mode == encodeQueryComponent
+			i++
+		default:
+			if ((mode == encodeHost || mode == encodeZone) && s[i] < 0x80 && shouldEscape(s[i], mode)) {
+				return "", InvalidHostError(s[i : i+1])
+			}
+			i++
+		}
+	}
+
+	if (n == 0 && !hasPlus) {
+		return s, nil
+	}
+
+	var t strings.Builder
+	t.Grow(len(s) - 2*n)
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '%':
+			t.WriteByte(unhex(s[i+1])<<4 | unhex(s[i+2]))
+			i += 2
+		case '+':
+			if mode == encodeQueryComponent {
+				t.WriteByte(' ')
+			} else {
+				t.WriteByte('+')
+			}
+		default:
+			t.WriteByte(s[i])
+		}
+	}
+	return t.String(), nil
+}
+
+// parseHost parses host as an authority without user
+// information. That is, as host[:port].
+var parseHost = (host: string): Result<string> {
+	if (strings.hasPrefix(host, "[")) {
+		// Parse an IP-Literal in RFC 3986 and RFC 6874.
+		// E.g., "[fe80::1]", "[fe80::1%25en0]", "[fe80::1]:80".
+		var i = host.lastIndexOf("]")
+		if (i < 0) {
+			return { name: 'MISSING_RBRACKET_IN_HOST', message: "missing ']' in host" }
+		}
+
+		var colonPort = host.slice(i+1)
+		if (!validOptionalPort(colonPort)) {
+			return { name: 'INVALID_HOST_PORT', message: `invalid port ${colonPort} after host`}
+		}
+
+		// RFC 6874 defines that %25 (%-encoded percent) introduces
+		// the zone identifier, and the zone identifier can use basically
+		// any %-encoding it likes. That's different from the host, which
+		// can only %-encode non-ASCII bytes.
+		// We do impose some restrictions on the zone, to avoid stupidity
+		// like newlines.
+		var zone = host.slice(0, i).indexOf("%25");
+		if (zone >= 0) {
+			host1, err := unescape(host[:zone], encodeHost)
+			if err != nil {
+				return "", err
+			}
+			host2, err := unescape(host[zone:i], encodeZone)
+			if err != nil {
+				return "", err
+			}
+			host3, err := unescape(host[i:], encodeHost)
+			if err != nil {
+				return "", err
+			}
+			return host1 + host2 + host3, nil
+		}
+	} else if (i := strings.LastIndex(host, ":"); i != -1) {
+		colonPort := host[i:]
+		if !validOptionalPort(colonPort) {
+			return "", fmt.Errorf("invalid port %q after host", colonPort)
+		}
+	}
+
+	var err error
+	if host, err = unescape(host, encodeHost); err != nil {
+		return "", err
+	}
+	return host, nil
+}
+
+
+var parseAuthority = (authority: string):{} => {
+	var i = authority.lastIndexOf("@");
+	if (i < 0) {
+		host, err = parseHost(authority)
+	} else {
+		host, err = parseHost(authority[i+1:])
+	}
+	if err != nil {
+		return nil, "", err
+	}
+	if i < 0 {
+		return nil, host, nil
+	}
+	userinfo := authority[:i]
+	if !validUserinfo(userinfo) {
+		return nil, "", errors.New("net/url: invalid userinfo")
+	}
+	if !strings.Contains(userinfo, ":") {
+		if userinfo, err = unescape(userinfo, encodeUserPassword); err != nil {
+			return nil, "", err
+		}
+		user = User(userinfo)
+	} else {
+		username, password, _ := strings.Cut(userinfo, ":")
+		if username, err = unescape(username, encodeUserPassword); err != nil {
+			return nil, "", err
+		}
+		if password, err = unescape(password, encodeUserPassword); err != nil {
+			return nil, "", err
+		}
+		user = UserPassword(username, password)
+	}
+	return user, host, nil
+}
 
 // parse parses a URL from a string in one of two contexts. If
 // viaRequest is true, the URL is assumed to have arrived via an HTTP request,
@@ -161,11 +373,12 @@ var parse = (rawURL: string, viaRequest: boolean): Result<URL> => {
             authority = tup[0];
             rest = tup[1];
 		}
-		url.User, url.Host, err = parseAuthority(authority)
-		if err != nil {
-			return nil, err
+        //url.User, url.Host, err = parseAuthority(authority)
+		let authorityRes = parseAuthority(authority)
+		if (isError(authorityRes)) {
+            return authorityRes
 		}
-	} else if url.Scheme != "" && strings.HasPrefix(rest, "/") {
+	} else if (url.Scheme != "" && strings.hasPrefix(rest, "/")) {
 		// OmitHost is set to true when rawURL has an empty host (authority).
 		// See golang.org/issue/46059.
 		url.OmitHost = true
