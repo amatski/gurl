@@ -163,7 +163,7 @@ var unescape = (s: string, mode: number): Result<string> => {
 			// introduces %25 being allowed to escape a percent sign
 			// in IPv6 scoped-address literals. Yay.
 			if (mode == encodeHost && unhex(s[i+1]) < 8 && s.slice(i, i+3) != "%25") {
-				return "", EscapeError(s[i : i+3])
+				return { name: "", message: s.slice(i, i+3) }
 			}
 			if (mode == encodeZone) {
 				// RFC 6874 says basically "anything goes" for zone identifiers
@@ -175,7 +175,7 @@ var unescape = (s: string, mode: number): Result<string> => {
 				// But Windows puts spaces here! Yay.
 				let v = unhex(s[i+1])<<4 | unhex(s[i+2]);
 				if (s.slice(i, i+3) != "%25" && v != ' '.charCodeAt(0) && shouldEscape(v, encodeHost)) {
-					return "", EscapeError(s[i : i+3])
+					return { name: "", message: s.slice(i, i+3) }
 				}
 			}
 			i += 3
@@ -194,9 +194,8 @@ var unescape = (s: string, mode: number): Result<string> => {
 		return s, nil
 	}
 
-	var t strings.Builder
-	t.Grow(len(s) - 2*n)
-	for i := 0; i < len(s); i++ {
+	t = "";
+	for (var i =0; i < s.length; i++) {
 		switch s[i] {
 		case '%':
 			t.WriteByte(unhex(s[i+1])<<4 | unhex(s[i+2]))
